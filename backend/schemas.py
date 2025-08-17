@@ -1,0 +1,44 @@
+from typing import Optional
+from pydantic import BaseModel
+import datetime  # ✅ import the module
+from enum import Enum
+
+
+#Enum for transaction types
+class TransactionType(str,Enum):
+    income = "income"
+    expense="expense"
+
+# Create transaction schema
+class TransactionCreate(BaseModel):
+    transaction_date: Optional[datetime.date] = None
+    description: str
+    amount: float
+    category_id: int
+    transaction_type: TransactionType
+
+# Update transaction schema
+class TransactionUpdate(BaseModel):
+    transaction_date: Optional[datetime.date] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    category_id: Optional[int] = None
+    transaction_type: Optional[TransactionType] = None
+
+# Response schema
+class TransactionResponse(BaseModel):
+    transaction_id: int
+    transaction_date: datetime.date
+    description: str
+    amount: float
+    category_id: int
+    transaction_type: TransactionType
+
+# Response with category name
+class TransactionWithCategory(BaseModel):
+    transaction_id: int
+    transaction_date: datetime.date
+    description: str
+    amount: float
+    category: Optional[str] = None
+    transaction_type: TransactionType
