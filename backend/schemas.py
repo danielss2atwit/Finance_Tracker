@@ -42,3 +42,13 @@ class TransactionWithCategory(BaseModel):
     amount: float
     category: Optional[str] = None
     transaction_type: TransactionType
+
+class TransactionDeleteResponse(BaseModel):
+    message: str
+
+class CategoryCreate(BaseModel):
+    name: str
+
+class CategoryResponse(BaseModel):
+    category_id: int
+    name: str

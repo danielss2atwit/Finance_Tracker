@@ -1,11 +1,13 @@
 from fastapi import FastAPI, HTTPException
-from schemas import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionWithCategory
+from schemas import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionWithCategory, TransactionDeleteResponse, CategoryCreate, CategoryResponse
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import os
 from typing import List
 from pathlib import Path
+
+
 
 # Load .env
 env_path = Path('.') / '.env'
@@ -121,3 +123,90 @@ def edit_transaction(transaction_id: int, transaction: TransactionUpdate):
         return [updated_transaction]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.delete("/transactions/{transaction_id}", response_model=TransactionDeleteResponse)
+def delete_transaction(transaction_id: int = Path(description="The ID of the transaction to delete")):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            DELETE FROM transactions
+            WHERE transaction_id = %s
+            RETURNING transaction_id;
+            """,
+            (transaction_id,)
+        )
+        deleted = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+        return TransactionDeleteResponse(message=f"Transaction {transaction_id} deleted successfully")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Create a new category
+@app.post("/categories", response_model=CategoryResponse)
+def create_category(category: CategoryCreate):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # Check if the category already exists (case-insensitive)
+        cur.execute(
+            "SELECT category_id FROM categories WHERE LOWER(name) = LOWER(%s);",
+            (category.name,)
+        )
+        existing = cur.fetchone()
+
+        if existing:
+            cur.close()
+            conn.close()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Category '{category.name}' already exists."
+            )
+
+        # Insert new category
+        cur.execute(
+            "INSERT INTO categories (name) VALUES (%s) RETURNING category_id, name;",
+            (category.name,)
+        )
+        new_category = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return new_category
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/categories", response_model=List[CategoryResponse])
+def get_categories():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT category_id, name
+            FROM categories
+            ORDER BY name ASC;
+            """
+        )
+        categories = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return categories
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
