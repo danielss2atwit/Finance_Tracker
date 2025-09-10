@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
-import datetime  # ✅ import the module
+import datetime 
 from enum import Enum
 
 
@@ -40,6 +40,7 @@ class TransactionWithCategory(BaseModel):
     transaction_date: datetime.date
     description: str
     amount: float
+    category_id: Optional[int] = None
     category: Optional[str] = None
     transaction_type: TransactionType
 
@@ -52,3 +53,22 @@ class CategoryCreate(BaseModel):
 class CategoryResponse(BaseModel):
     category_id: int
     name: str
+
+class MonthlySummaryResponse(BaseModel):
+    month: int
+    year: int
+    total_income: float
+    total_expenses: float
+    top_category: Optional[str] = None
+    top_category_spent: float = 0.0
+
+
+class SpendingByCategoryItem(BaseModel):
+    category: str
+    total_spent: float
+
+
+class SpendingByCategoryResponse(BaseModel):
+    month: int
+    year: int
+    spending: List[SpendingByCategoryItem]

@@ -1,15 +1,16 @@
-from fastapi import FastAPI, HTTPException, Path, Query
-from schemas import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionWithCategory, TransactionDeleteResponse, CategoryCreate, CategoryResponse
+from fastapi import FastAPI, HTTPException, Path, Query, Request
+from schemas import (
+    TransactionCreate, TransactionUpdate, TransactionResponse,
+    TransactionWithCategory, TransactionDeleteResponse,
+    CategoryCreate, CategoryResponse, MonthlySummaryResponse, SpendingByCategoryResponse, SpendingByCategoryItem
+)
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import os
-from typing import List
+from typing import List, Optional
 from pathlib import Path as FilePath
 import datetime
-from typing import Optional, List
-
-
 
 # Load .env
 env_path = FilePath('.') / '.env'
@@ -18,10 +19,7 @@ load_dotenv(dotenv_path=env_path)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise ValueError(
-        "DATABASE_URL not found in environment variables. "
-        "Make sure you have a .env file in the project root with DATABASE_URL set."
-    )
+    raise ValueError("DATABASE_URL not found in environment variables.")
 
 app = FastAPI()
 
@@ -32,37 +30,37 @@ def get_connection():
     except psycopg2.OperationalError as e:
         raise ConnectionError(f"Could not connect to the database: {e}")
 
+
 @app.get("/")
 def home():
     return {"message": "Welcome to the Finance Tracker API"}
 
-@app.get("/debug-env")
-def debug_env():
-    return {"DATABASE_URL": os.getenv("DATABASE_URL")}
+
+
+@app.post("/transactions/")
+async def create_transaction(request: Request):
+    data = await request.json()
+    print("Raw JSON:", data)
 
 @app.get("/transactions", response_model=List[TransactionWithCategory])
 def get_transactions(
-    start_date: Optional[datetime.date] = Query(None, description="Filter from this date"),
-    end_date: Optional[datetime.date] = Query(None, description="Filter up to this date"),
-    month: Optional[int] = Query(None, ge=1, le=12, description="Filter by month (1-12)"),
-    year: Optional[int] = Query(None, description="Year for month filter"),
-    category_id: Optional[int] = Query(None, description="Filter by category ID")
+    start_date: Optional[datetime.date] = Query(None),
+    end_date: Optional[datetime.date] = Query(None),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None),
+    category_id: Optional[int] = Query(None)
 ):
     try:
         conn = get_connection()
         cur = conn.cursor()
-
-        # Base query
         query = """
             SELECT t.transaction_id, t.transaction_date, t.description, 
                    t.amount, t.transaction_type, c.name AS category
             FROM transactions t
             LEFT JOIN categories c ON t.category_id = c.category_id
         """
-        filters = []
-        params = []
+        filters, params = [], []
 
-        # Add filters if provided
         if start_date:
             filters.append("t.transaction_date >= %s")
             params.append(start_date)
@@ -78,24 +76,25 @@ def get_transactions(
             filters.append("t.category_id = %s")
             params.append(category_id)
 
-        # Only add WHERE if there are filters
         if filters:
             query += " WHERE " + " AND ".join(filters)
 
         query += " ORDER BY t.transaction_date DESC;"
 
-        # Execute
         cur.execute(query, params)
-        results = cur.fetchall()
+        rows = cur.fetchall()
         cur.close()
         conn.close()
-        return results
+
+        return [TransactionWithCategory(**row) for row in rows]
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-# Add transaction
-@app.post("/transactions", response_model=List[TransactionResponse])
+
+
+@app.post("/transactions", response_model=TransactionResponse)
 def create_transaction(transaction: TransactionCreate):
+    print("Recieved:",transaction)
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -105,26 +104,29 @@ def create_transaction(transaction: TransactionCreate):
             VALUES (%s, %s, %s, %s, %s)
             RETURNING transaction_id, transaction_date, description, amount, category_id, transaction_type;
             """,
-            (transaction.transaction_date,  # ✅ use transaction_date
-        transaction.description,
-        transaction.amount,
-        transaction.category_id,
-        transaction.transaction_type,),
+            (
+                transaction.transaction_date,
+                transaction.description,
+                transaction.amount,
+                transaction.category_id,
+                transaction.transaction_type,
+            ),
         )
-        new_transaction = cur.fetchone()
+        row = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
 
-        if not new_transaction:
+        if not row:
             raise HTTPException(status_code=400, detail="Transaction could not be created")
 
-        return [new_transaction]
+        return TransactionResponse(**row)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Edit a transaction
-@app.put("/transactions/{transaction_id}", response_model=List[TransactionResponse])
+
+@app.put("/transactions/{transaction_id}", response_model=TransactionResponse)
 def edit_transaction(transaction_id: int, transaction: TransactionUpdate):
     try:
         conn = get_connection()
@@ -141,45 +143,44 @@ def edit_transaction(transaction_id: int, transaction: TransactionUpdate):
             WHERE transaction_id = %s
             RETURNING transaction_id, transaction_date, description, amount, category_id, transaction_type;
             """,
-            ( transaction.transaction_date,  # ✅ use transaction_date
-        transaction.description,
-        transaction.amount,
-        transaction.category_id,
-        transaction.transaction_type,
-        transaction_id,),
+            (
+                transaction.transaction_date,
+                transaction.description,
+                transaction.amount,
+                transaction.category_id,
+                transaction.transaction_type,
+                transaction_id,
+            ),
         )
-        updated_transaction = cur.fetchone()
+        row = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
 
-        if not updated_transaction:
+        if not row:
             raise HTTPException(status_code=404, detail="Transaction not found")
 
-        return [updated_transaction]
+        return TransactionResponse(**row)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 @app.delete("/transactions/{transaction_id}", response_model=TransactionDeleteResponse)
-def delete_transaction(transaction_id: int = Path(...,description="The ID of the transaction to delete")):
+def delete_transaction(transaction_id: int = Path(...)):
     try:
         conn = get_connection()
         cur = conn.cursor()
-
         cur.execute(
-            """
-            DELETE FROM transactions
-            WHERE transaction_id = %s
-            RETURNING transaction_id;
-            """,
+            "DELETE FROM transactions WHERE transaction_id = %s RETURNING transaction_id;",
             (transaction_id,)
         )
-        deleted = cur.fetchone()
+        row = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
 
-        if not deleted:
+        if not row:
             raise HTTPException(status_code=404, detail="Transaction not found")
 
         return TransactionDeleteResponse(message=f"Transaction {transaction_id} deleted successfully")
@@ -187,14 +188,12 @@ def delete_transaction(transaction_id: int = Path(...,description="The ID of the
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Create a new category
+
 @app.post("/categories", response_model=CategoryResponse)
 def create_category(category: CategoryCreate):
     try:
         conn = get_connection()
         cur = conn.cursor()
-
-        # Check if the category already exists (case-insensitive)
         cur.execute(
             "SELECT category_id FROM categories WHERE LOWER(name) = LOWER(%s);",
             (category.name,)
@@ -204,64 +203,46 @@ def create_category(category: CategoryCreate):
         if existing:
             cur.close()
             conn.close()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Category '{category.name}' already exists."
-            )
+            raise HTTPException(status_code=400, detail=f"Category '{category.name}' already exists.")
 
-        # Insert new category
         cur.execute(
             "INSERT INTO categories (name) VALUES (%s) RETURNING category_id, name;",
             (category.name,)
         )
-        new_category = cur.fetchone()
+        row = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
 
-        return new_category
+        return CategoryResponse(**row)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/categories", response_model=List[CategoryResponse])
 def get_categories():
     try:
         conn = get_connection()
         cur = conn.cursor()
-
-        cur.execute(
-            """
-            SELECT category_id, name
-            FROM categories
-            ORDER BY name ASC;
-            """
-        )
-        categories = cur.fetchall()
+        cur.execute("SELECT category_id, name FROM categories ORDER BY name ASC;")
+        rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        return categories
+        return [CategoryResponse(**row) for row in rows]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-# Update a category
+
+
 @app.put("/categories/{category_id}", response_model=CategoryResponse)
-def edit_category(
-    category: CategoryCreate,  # 👈 JSON body
-    category_id: int = Path(..., description="The ID of the category to update")  # 👈 path param
-):
+def edit_category(category: CategoryCreate, category_id: int = Path(...)):
     try:
         conn = get_connection()
         cur = conn.cursor()
-
-        # Check if another category with the same name exists (avoid duplicates)
         cur.execute(
-            """
-            SELECT category_id FROM categories
-            WHERE LOWER(name) = LOWER(%s) AND category_id != %s;
-            """,
+            "SELECT category_id FROM categories WHERE LOWER(name) = LOWER(%s) AND category_id != %s;",
             (category.name, category_id)
         )
         existing = cur.fetchone()
@@ -269,42 +250,32 @@ def edit_category(
         if existing:
             cur.close()
             conn.close()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Category '{category.name}' already exists."
-            )
+            raise HTTPException(status_code=400, detail=f"Category '{category.name}' already exists.")
 
-        # Update the category
         cur.execute(
-            """
-            UPDATE categories
-            SET name = %s
-            WHERE category_id = %s
-            RETURNING category_id, name;
-            """,
+            "UPDATE categories SET name = %s WHERE category_id = %s RETURNING category_id, name;",
             (category.name, category_id)
         )
-        updated_category = cur.fetchone()
+        row = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
 
-        if not updated_category:
+        if not row:
             raise HTTPException(status_code=404, detail="Category not found")
 
-        return updated_category
+        return CategoryResponse(**row)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-#monthly summary 
-@app.get("/summary/monthly")
+########################################################    
+# monthly summary 
+@app.get("/summary/monthly", response_model=MonthlySummaryResponse)
 def get_monthly_summary(
     month: int = Query(default=None, ge=1, le=12),
     year: int = Query(default=None, ge=2000)
 ):
     try:
-        # Default to current month/year if not provided
         today = datetime.date.today()
         if not month:
             month = today.month
@@ -318,21 +289,21 @@ def get_monthly_summary(
 
         # Total income
         cur.execute("""
-            SELECT COALESCE(SUM(amount), 0)
+            SELECT COALESCE(SUM(amount), 0) AS total_income
             FROM transactions
             WHERE transaction_type = 'income'
               AND DATE_TRUNC('month', transaction_date) = DATE_TRUNC('month', %s::date)
         """, (first_day,))
-        total_income = cur.fetchone()["coalesce"]
+        total_income = cur.fetchone()["total_income"]
 
         # Total expenses
         cur.execute("""
-            SELECT COALESCE(SUM(amount), 0)
+            SELECT COALESCE(SUM(amount), 0) AS total_expenses
             FROM transactions
             WHERE transaction_type = 'expense'
               AND DATE_TRUNC('month', transaction_date) = DATE_TRUNC('month', %s::date)
         """, (first_day,))
-        total_expenses = cur.fetchone()["coalesce"]
+        total_expenses = cur.fetchone()["total_expenses"]
 
         # Most purchased category
         cur.execute("""
@@ -350,20 +321,21 @@ def get_monthly_summary(
         cur.close()
         conn.close()
 
-        return {
-            "month": month,
-            "year": year,
-            "total_income": float(total_income or 0),
-            "total_expenses": float(total_expenses or 0),
-            "top_category": top_category["name"] if top_category else None,
-            "top_category_spent": float(top_category["total_spent"]) if top_category else 0
-        }
+        return MonthlySummaryResponse(
+            month=month,
+            year=year,
+            total_income=float(total_income or 0),
+            total_expenses=float(total_expenses or 0),
+            top_category=top_category["name"] if top_category else None,
+            top_category_spent=float(top_category["total_spent"]) if top_category else 0
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-#spending by category
-@app.get("/summary/spending-by-category")
+
+# spending by category
+@app.get("/summary/spending-by-category", response_model=SpendingByCategoryResponse)
 def spending_by_category(
     year: int = Query(..., description="Year (e.g., 2025)"),
     month: int = Query(..., ge=1, le=12, description="Month (1-12)")
@@ -386,11 +358,17 @@ def spending_by_category(
             """,
             (year, month)
         )
-        results = cur.fetchall()
+        rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        return results
+        spending = [SpendingByCategoryItem(category=row["category"], total_spent=float(row["total_spent"])) for row in rows]
+
+        return SpendingByCategoryResponse(
+            month=month,
+            year=year,
+            spending=spending
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
