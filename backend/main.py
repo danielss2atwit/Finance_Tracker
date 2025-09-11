@@ -35,12 +35,17 @@ def get_connection():
 def home():
     return {"message": "Welcome to the Finance Tracker API"}
 
+def validate_transaction_input(cur, tx: TransactionCreate):
+    if tx.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
 
+    if tx.transaction_date > datetime.date.today():
+        raise HTTPException(status_code=400, detail="Transaction date cannot be in the future")
 
-@app.post("/transactions/")
-async def create_transaction(request: Request):
-    data = await request.json()
-    print("Raw JSON:", data)
+    cur.execute("SELECT category_id FROM categories WHERE category_id = %s", (tx.category_id,))
+    if cur.fetchone() is None:
+        raise HTTPException(status_code=400, detail=f"Category with id {tx.category_id} does not exist")
+
 
 @app.get("/transactions", response_model=List[TransactionWithCategory])
 def get_transactions(
@@ -98,6 +103,10 @@ def create_transaction(transaction: TransactionCreate):
     try:
         conn = get_connection()
         cur = conn.cursor()
+
+        #validation
+        validate_transaction_input(cur,transaction)
+
         cur.execute(
             """
             INSERT INTO transactions (transaction_date, description, amount, category_id, transaction_type)
@@ -123,7 +132,7 @@ def create_transaction(transaction: TransactionCreate):
         return TransactionResponse(**row)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: str(e)")
 
 
 @app.put("/transactions/{transaction_id}", response_model=TransactionResponse)
@@ -131,6 +140,19 @@ def edit_transaction(transaction_id: int, transaction: TransactionUpdate):
     try:
         conn = get_connection()
         cur = conn.cursor()
+
+         # validation (only check if provided)
+        if transaction.amount is not None and transaction.amount <= 0:
+            raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+
+        if transaction.transaction_date and transaction.transaction_date > datetime.date.today():
+            raise HTTPException(status_code=400, detail="Transaction date cannot be in the future")
+
+        if transaction.category_id is not None:
+            cur.execute("SELECT category_id FROM categories WHERE category_id = %s", (transaction.category_id,))
+            if cur.fetchone() is None:
+                raise HTTPException(status_code=400, detail=f"Category with id {transaction.category_id} does not exist")
+            
         cur.execute(
             """
             UPDATE transactions
@@ -192,6 +214,11 @@ def delete_transaction(transaction_id: int = Path(...)):
 @app.post("/categories", response_model=CategoryResponse)
 def create_category(category: CategoryCreate):
     try:
+
+        name = category.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Category name cannot be empty")
+    
         conn = get_connection()
         cur = conn.cursor()
         cur.execute(
