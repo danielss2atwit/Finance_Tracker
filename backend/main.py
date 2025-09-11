@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Path, Query, Request
 from schemas import (
     TransactionCreate, TransactionUpdate, TransactionResponse,
     TransactionWithCategory, TransactionDeleteResponse,
-    CategoryCreate, CategoryResponse, MonthlySummaryResponse, SpendingByCategoryResponse, SpendingByCategoryItem
+    CategoryCreate, CategoryResponse, MonthlySummaryResponse, SpendingByCategoryResponse, SpendingByCategoryItem,TransactionType
 )
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -53,7 +53,10 @@ def get_transactions(
     end_date: Optional[datetime.date] = Query(None),
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None),
-    category_id: Optional[int] = Query(None)
+    category_id: Optional[int] = Query(None),
+    transaction_type: Optional[TransactionType] = Query(None),
+    limit: int = Query(10, ge=1),
+    offset: int = Query(0, ge=0)
 ):
     try:
         conn = get_connection()
@@ -80,11 +83,15 @@ def get_transactions(
         if category_id:
             filters.append("t.category_id = %s")
             params.append(category_id)
+        if transaction_type:
+            filters.append("t.transaction_type = %s")
+            params.append(transaction_type.value)
 
         if filters:
             query += " WHERE " + " AND ".join(filters)
 
-        query += " ORDER BY t.transaction_date DESC;"
+        query += " ORDER BY t.transaction_date DESC LIMIT %s OFFSET %s;"
+        params.etend([limit, offset])
 
         cur.execute(query, params)
         rows = cur.fetchall()
@@ -93,8 +100,8 @@ def get_transactions(
 
         return [TransactionWithCategory(**row) for row in rows]
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later.")
 
 
 @app.post("/transactions", response_model=TransactionResponse)
@@ -131,8 +138,8 @@ def create_transaction(transaction: TransactionCreate):
 
         return TransactionResponse(**row)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: str(e)")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later.")
 
 
 @app.put("/transactions/{transaction_id}", response_model=TransactionResponse)
@@ -184,8 +191,8 @@ def edit_transaction(transaction_id: int, transaction: TransactionUpdate):
 
         return TransactionResponse(**row)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later.")
 
 
 @app.delete("/transactions/{transaction_id}", response_model=TransactionDeleteResponse)
@@ -243,8 +250,8 @@ def create_category(category: CategoryCreate):
 
         return CategoryResponse(**row)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later.")
 
 
 @app.get("/categories", response_model=List[CategoryResponse])
@@ -293,8 +300,8 @@ def edit_category(category: CategoryCreate, category_id: int = Path(...)):
 
         return CategoryResponse(**row)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later.")
 ########################################################    
 # monthly summary 
 @app.get("/summary/monthly", response_model=MonthlySummaryResponse)
@@ -357,14 +364,14 @@ def get_monthly_summary(
             top_category_spent=float(top_category["total_spent"]) if top_category else 0
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later.")
 
 
 # spending by category
 @app.get("/summary/spending-by-category", response_model=SpendingByCategoryResponse)
 def spending_by_category(
-    year: int = Query(..., description="Year (e.g., 2025)"),
+    year: int = Query(..., ge=2000, description="Year (e.g., 2025)"),
     month: int = Query(..., ge=1, le=12, description="Month (1-12)")
 ):
     try:
@@ -397,5 +404,5 @@ def spending_by_category(
             spending=spending
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later.")
